@@ -36,7 +36,7 @@ func main() {
 
     cloneURLs, err := getProjects(conf)
     if err != nil {
-        fmt.Println(err)
+        fmt.Println("on getProjects:", err)
         return
     }
 
@@ -85,7 +85,7 @@ func runLinter(conf *Config, project string) error {
 
     out, err := exec.Command(filepath.Join(tmpDir, binaryName), args...).CombinedOutput()
     if err != nil {
-        return fmt.Errorf("%s: %s", out, err)
+        return fmt.Errorf("%s: %s", err, out)
     }
 
     return nil
@@ -105,7 +105,7 @@ func buildLinter(conf *Config) error {
 func gitClone(config *Config, project string) error {
     out, err := exec.Command("git", "clone", project, config.ProjectsDir).CombinedOutput()
     if err != nil {
-        return fmt.Errorf("%s: %s", out, err)
+        return fmt.Errorf("%s: %s", err, out)
     }
 
     return nil
