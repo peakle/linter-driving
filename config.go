@@ -5,7 +5,10 @@ import (
 )
 
 type Config struct {
-    Token string `required:"true"`
+    Token          string   `required:"true"`
+    ProjectsDir    string   `required:"true"`
+    LinterCloneURL string   `require:"true"`
+    LinterArgs     []string `required:"true"`
 }
 
 func InitConfig() (*Config, error) {

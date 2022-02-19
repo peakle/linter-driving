@@ -7,7 +7,14 @@ import (
     "io/ioutil"
     "net/http"
     "net/url"
+    "os"
+    "os/exec"
+    "path/filepath"
+    "sync"
+    "time"
 )
+
+const binaryName = "linter.exe"
 
 type ApiResult struct {
     Items []Item `json:"items"`
@@ -18,19 +25,90 @@ type Item struct {
 }
 
 func main() {
+    startTime := time.Now()
+    defer fmt.Println("finish: executed in:", time.Since(startTime))
+
     conf, err := InitConfig()
     if err != nil {
         fmt.Println(err)
         return
     }
 
-    projects, err := getProjects(conf)
+    cloneURLs, err := getProjects(conf)
     if err != nil {
         fmt.Println(err)
         return
     }
 
-    fmt.Println(projects)
+    var wg *sync.WaitGroup
+
+    if err = buildLinter(conf); err != nil {
+        fmt.Println("on buildLinter:", err)
+        return
+    }
+
+    wg.Add(len(cloneURLs))
+    for _, p := range cloneURLs {
+        go func(project string) {
+            defer wg.Done()
+            if err := gitClone(conf, project); err != nil {
+                fmt.Printf("on gitClone: %s: %s \n", project, err)
+                return
+            }
+        }(p)
+    }
+    wg.Wait()
+
+    projects, err := os.ReadDir(conf.ProjectsDir)
+    if err != nil {
+        fmt.Println("on os.ReadDir:", err)
+        return
+    }
+
+    wg.Add(len(projects))
+    for _, p := range projects {
+        go func(project string) {
+            defer wg.Done()
+            if err := runLinter(conf, project); err != nil {
+                fmt.Println("on runLinter:", project, err)
+            }
+        }(p.Name())
+    }
+    wg.Wait()
+}
+
+func runLinter(conf *Config, project string) error {
+    tmpDir := os.TempDir()
+
+    args := conf.LinterArgs
+    args = append(args, project)
+
+    out, err := exec.Command(filepath.Join(tmpDir, binaryName), args...).CombinedOutput()
+    if err != nil {
+        return fmt.Errorf("%s: %s", out, err)
+    }
+
+    return nil
+}
+
+func buildLinter(conf *Config) error {
+    tmpDir := os.TempDir()
+    args := []string{"build", "-o", filepath.Join(tmpDir, binaryName), conf.LinterCloneURL}
+    out, err := exec.Command("go", args...).CombinedOutput()
+    if err != nil {
+        return fmt.Errorf("%s: %s", err, out)
+    }
+
+    return nil
+}
+
+func gitClone(config *Config, project string) error {
+    out, err := exec.Command("git", "clone", project, config.ProjectsDir).CombinedOutput()
+    if err != nil {
+        return fmt.Errorf("%s: %s", out, err)
+    }
+
+    return nil
 }
 
 func getProjects(config *Config) ([]string, error) {
