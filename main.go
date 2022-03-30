@@ -1,12 +1,12 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/ioutil"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,10 +17,10 @@ import (
 const binaryName = "linter.exe"
 
 type APIResult struct {
-	Items []Item `json:"items"`
+	Items []item `json:"items"`
 }
 
-type Item struct {
+type item struct {
 	CloneURL string `json:"clone_url"`
 }
 
@@ -28,7 +28,7 @@ func main() {
 	startTime := time.Now()
 	defer fmt.Println("finish: executed in:", time.Since(startTime))
 
-	conf, err := InitConfig()
+	conf, err := initConfig()
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -77,7 +77,7 @@ func main() {
 	wg.Wait()
 }
 
-func runLinter(conf *Config, project string) error {
+func runLinter(conf *config, project string) error {
 	tmpDir := os.TempDir()
 
 	args := conf.LinterArgs
@@ -91,7 +91,7 @@ func runLinter(conf *Config, project string) error {
 	return nil
 }
 
-func buildLinter(conf *Config) error {
+func buildLinter(conf *config) error {
 	tmpDir := os.TempDir()
 	args := []string{"build", "-o", filepath.Join(tmpDir, binaryName), conf.LinterCloneURL}
 	out, err := exec.Command("go", args...).CombinedOutput()
@@ -102,7 +102,7 @@ func buildLinter(conf *Config) error {
 	return nil
 }
 
-func gitClone(config *Config, project string) error {
+func gitClone(config *config, project string) error {
 	out, err := exec.Command("git", "clone", project, config.ProjectsDir).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s: %s", err, out)
@@ -111,20 +111,20 @@ func gitClone(config *Config, project string) error {
 	return nil
 }
 
-func getProjects(config *Config) ([]string, error) {
-	var client http.Client
-	u, err := url.Parse("https://api.github.com/search/repositories?q=language:go&stars:>500")
-	if err != nil {
-		return nil, fmt.Errorf("on url.Parse: %s", err)
-	}
+func getProjects(config *config) ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
 
-	resp, err := client.Do(&http.Request{
-		Method: http.MethodGet,
-		URL:    u,
-		Header: map[string][]string{
-			"Authorization": {fmt.Sprintf("token %s", config.Token)},
-		},
-	})
+	var client http.Client
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/search/repositories?q=language:go&stars:>500", http.NoBody)
+	if err != nil {
+		return nil, fmt.Errorf("on create request: %s", err)
+	}
+	req.Header.Add("Authorization", "token "+config.Token)
+
+	resp, err := client.Do(req)
+
 	if err != nil {
 		return nil, fmt.Errorf("on github search: %s", err)
 	}

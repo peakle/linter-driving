@@ -4,15 +4,15 @@ import (
 	"github.com/vrischmann/envconfig"
 )
 
-type Config struct {
+type config struct {
 	Token          string   `required:"true"`
-	ProjectsDir    string   `required:"true"`
-	LinterCloneURL string   `require:"true"`
+	ProjectsDir    string   `envconfig:"default=projects"`
+	LinterCloneURL string   `envconfig:"default=github.com/delivery-club/delivery-club-rules/tree/main/cmd/dcRules"`
 	LinterArgs     []string `required:"true"`
 }
 
-func InitConfig() (*Config, error) {
-	conf := &Config{}
+func initConfig() (*config, error) {
+	conf := &config{}
 	if err := envconfig.Init(conf); err != nil {
 		return nil, err
 	}
