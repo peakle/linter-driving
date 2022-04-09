@@ -5,17 +5,18 @@ import (
 )
 
 type config struct {
-	Token          string   `required:"true"`
-	ProjectsDir    string   `envconfig:"default=projects"`
-	LinterCloneURL string   `envconfig:"default=github.com/delivery-club/delivery-club-rules/tree/main/cmd/dcRules"`
-	LinterArgs     []string `required:"true"`
+	Token            string   `required:"true"`
+	ExcludedProjects []string `envconfig:"default=kubernetes;the-way-to-go_ZH_CN"`
+	ProjectsDir      string   `envconfig:"default=projects"`
+	LinterCloneURL   string   `envconfig:"default=https://github.com/delivery-club/delivery-club-rules"`
+	PathToMain       string   `envconfig:"default=/cmd/dcRules"`
+	BinaryName       string   `envconfig:"default=dcRules"`
+	LinterArgs       []string `required:"true"`
 }
 
 func initConfig() (*config, error) {
 	conf := &config{}
-	if err := envconfig.Init(conf); err != nil {
-		return nil, err
-	}
+	err := envconfig.Init(conf)
 
-	return conf, nil
+	return conf, err
 }

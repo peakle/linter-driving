@@ -10,18 +10,23 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
 
-const binaryName = "linter.exe"
-
-type APIResult struct {
+type apiResult struct {
 	Items []item `json:"items"`
 }
 
 type item struct {
 	CloneURL string `json:"clone_url"`
+}
+
+type project struct {
+	Dir      string
+	Name     string
+	CloneURL string
 }
 
 func main() {
@@ -34,56 +39,60 @@ func main() {
 		return
 	}
 
-	cloneURLs, err := getProjects(conf)
+	projects, err := getProjects(conf)
 	if err != nil {
 		fmt.Println("on getProjects:", err)
 		return
 	}
-
-	var wg *sync.WaitGroup
 
 	if err = buildLinter(conf); err != nil {
 		fmt.Println("on buildLinter:", err)
 		return
 	}
 
-	wg.Add(len(cloneURLs))
-	for _, p := range cloneURLs {
-		go func(project string) {
+	var wg sync.WaitGroup
+	wg.Add(len(projects))
+	for _, p := range projects {
+		go func(p project) {
 			defer wg.Done()
-			if err := gitClone(conf, project); err != nil {
-				fmt.Printf("on gitClone: %s: %s \n", project, err)
+			if err := gitClone(conf, p); err != nil {
+				fmt.Printf("on gitClone: %s: %s \n", p.CloneURL, err)
 				return
 			}
 		}(p)
 	}
 	wg.Wait()
 
-	projects, err := os.ReadDir(conf.ProjectsDir)
+	dirs, err := os.ReadDir(conf.ProjectsDir)
 	if err != nil {
 		fmt.Println("on os.ReadDir:", err)
 		return
 	}
 
-	wg.Add(len(projects))
-	for _, p := range projects {
-		go func(project string) {
+	wg.Add(len(dirs))
+	for _, projectDir := range dirs {
+		p, ok := projects[projectDir.Name()]
+		if !ok {
+			continue
+		}
+
+		go func(p project) {
 			defer wg.Done()
-			if err := runLinter(conf, project); err != nil {
-				fmt.Println("on runLinter:", project, err)
+			if err := runLinter(conf, p); err != nil {
+				fmt.Println("on runLinter:", p, err)
 			}
-		}(p.Name())
+		}(p)
 	}
 	wg.Wait()
 }
 
-func runLinter(conf *config, project string) error {
-	tmpDir := os.TempDir()
-
+func runLinter(conf *config, p project) error {
 	args := conf.LinterArgs
-	args = append(args, project)
 
-	out, err := exec.Command(filepath.Join(tmpDir, binaryName), args...).CombinedOutput()
+	linterCmd := exec.Command(conf.BinaryName, args...)
+	linterCmd.Dir = p.Dir
+
+	out, err := linterCmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s: %s", err, out)
 	}
@@ -92,9 +101,42 @@ func runLinter(conf *config, project string) error {
 }
 
 func buildLinter(conf *config) error {
-	tmpDir := os.TempDir()
-	args := []string{"build", "-o", filepath.Join(tmpDir, binaryName), conf.LinterCloneURL}
-	out, err := exec.Command("go", args...).CombinedOutput()
+	// nolint:gocritic // TODO
+	//tmpDir := os.TempDir() + string(os.PathSeparator) + filepath.Base(conf.LinterCloneURL)
+	//defer os.RemoveAll(tmpDir)
+	//
+	//out, err := exec.Command("git", "clone", conf.LinterCloneURL, tmpDir).CombinedOutput()
+	//if err != nil {
+	//	return fmt.Errorf("on git clone linter: %s: %s", err, out)
+	//}
+	//
+	//args := []string{"build", "-o", filepath.Join(tmpDir, binaryName), tmpDir + conf.PathToMain}
+	//out, err = exec.Command("go", args...).CombinedOutput()
+	//if err != nil {
+	//	return fmt.Errorf("%s: %s", err, out)
+	//}
+	//
+	return nil
+}
+
+func gitClone(config *config, p project) error {
+	for _, excludedProject := range config.ExcludedProjects {
+		if strings.Contains(p.Name, excludedProject) {
+			return nil
+		}
+	}
+
+	var (
+		out []byte
+		err error
+	)
+	if os.IsExist(os.Mkdir(p.Dir, 0755)) {
+		cmd := exec.Command("git", "fetch")
+		cmd.Dir = p.Dir
+		out, err = cmd.CombinedOutput()
+	} else {
+		out, err = exec.Command("git", "clone", p.CloneURL, p.Dir).CombinedOutput()
+	}
 	if err != nil {
 		return fmt.Errorf("%s: %s", err, out)
 	}
@@ -102,16 +144,7 @@ func buildLinter(conf *config) error {
 	return nil
 }
 
-func gitClone(config *config, project string) error {
-	out, err := exec.Command("git", "clone", project, config.ProjectsDir).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%s: %s", err, out)
-	}
-
-	return nil
-}
-
-func getProjects(config *config) ([]string, error) {
+func getProjects(config *config) (map[string]project, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
@@ -124,11 +157,14 @@ func getProjects(config *config) ([]string, error) {
 	req.Header.Add("Authorization", "token "+config.Token)
 
 	resp, err := client.Do(req)
-
+	defer func() {
+		if resp.Body != nil {
+			resp.Body.Close()
+		}
+	}()
 	if err != nil {
 		return nil, fmt.Errorf("on github search: %s", err)
 	}
-	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, errors.New("on github search: non 200 status code")
@@ -139,14 +175,21 @@ func getProjects(config *config) ([]string, error) {
 		return nil, fmt.Errorf("on ReadAll: %s", err)
 	}
 
-	var res APIResult
+	var res apiResult
 	if err = json.Unmarshal(body, &res); err != nil {
 		return nil, fmt.Errorf("on Unmarshal: %s", err)
 	}
 
-	projects := make([]string, 0, len(res.Items))
+	projects := make(map[string]project, len(res.Items))
 	for _, r := range res.Items {
-		projects = append(projects, r.CloneURL)
+		name := strings.TrimSuffix(filepath.Base(r.CloneURL), ".git")
+		dir := config.ProjectsDir + string(os.PathSeparator) + name
+
+		projects[name] = project{
+			Dir:      dir,
+			Name:     name,
+			CloneURL: r.CloneURL,
+		}
 	}
 
 	return projects, nil
